@@ -11,6 +11,10 @@ const Block: React.FC<{ color: string; isGhost?: boolean }> = ({ color, isGhost 
 );
 
 const PiecePreview: React.FC<{ piece: Tetromino | null; label: string }> = ({ piece, label }) => {
+  // Filter out empty rows/cols for the preview to center it better
+  const renderShape = piece?.shape.filter(row => row.some(cell => cell !== 0)) || [];
+  const maxCols = renderShape.length > 0 ? Math.max(...renderShape.map(row => row.length)) : 0;
+
   return (
     <div className="flex flex-col gap-2">
       <div className="text-xs uppercase tracking-widest text-slate-500 px-2 font-bold">{label}</div>
@@ -19,10 +23,10 @@ const PiecePreview: React.FC<{ piece: Tetromino | null; label: string }> = ({ pi
           <div 
             className="grid gap-1"
             style={{ 
-              gridTemplateColumns: `repeat(${piece.shape[0].length}, minmax(0, 1fr))`,
+              gridTemplateColumns: `repeat(${maxCols}, minmax(0, 1fr))`,
             }}
           >
-            {piece.shape.map((row, y) => 
+            {renderShape.map((row, y) => 
               row.map((cell, x) => (
                 <div key={`${x}-${y}`} className="w-5 h-5">
                   {cell ? <Block color={piece.color} /> : null}
@@ -79,7 +83,7 @@ export default function App() {
     const def = TETROMINOES[type];
     return {
       type,
-      shape: def.shape,
+      shape: JSON.parse(JSON.stringify(def.shape)), // Deep copy shape
       color: def.color,
       position: { x: Math.floor(width / 2) - Math.floor(def.shape[0].length / 2), y: 0 }
     };
@@ -109,11 +113,21 @@ export default function App() {
   const toggleFreeze = useCallback(() => {
     setGameState(prev => {
       if (prev.status !== 'PLAYING') return prev;
-      return {
-        ...prev,
-        isFrozen: !prev.isFrozen
-      };
+      return { ...prev, isFrozen: !prev.isFrozen };
     });
+  }, []);
+
+  const stopGame = useCallback(() => {
+    setGameState(prev => ({
+      ...prev,
+      status: 'IDLE',
+      currentPiece: null,
+      isFrozen: false,
+      score: 0,
+      lines: 0,
+      level: 1
+    }));
+    setCoachComment("Session terminated. Awaiting new calibration.");
   }, []);
 
   const rotate = useCallback((clockwise: boolean) => {
@@ -151,7 +165,7 @@ export default function App() {
         if (cell) {
           const gridY = currentPiece.position.y + y;
           const gridX = currentPiece.position.x + x;
-          if (gridY >= 0) {
+          if (gridY >= 0 && gridY < config.height) {
             newGrid[gridY][gridX] = currentPiece.color;
           }
         }
@@ -175,9 +189,11 @@ export default function App() {
     const newLinesTotal = lines + clearedLinesCount;
     const newLevel = Math.floor(newLinesTotal / 10) + 1;
 
+    // IMPORTANT: The next piece spawns here
     const spawnPos = { x: Math.floor(config.width / 2) - Math.floor(nextPiece.shape[0].length / 2), y: 0 };
-    
-    if (checkCollision({ ...nextPiece, position: spawnPos }, filteredGrid)) {
+    const nextToSpawn = { ...nextPiece, position: spawnPos };
+
+    if (checkCollision(nextToSpawn, filteredGrid)) {
       return {
         ...state,
         grid: filteredGrid,
@@ -191,7 +207,7 @@ export default function App() {
     return {
       ...state,
       grid: filteredGrid,
-      currentPiece: { ...nextPiece, position: spawnPos },
+      currentPiece: nextToSpawn,
       nextPiece: getRandomPiece(config.width),
       canHold: true,
       isFrozen: false,
@@ -299,15 +315,17 @@ export default function App() {
           hardDrop();
           break;
         case 'KeyF':
-        case 'KeyC':
           toggleFreeze();
+          break;
+        case 'Escape':
+          stopGame();
           break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState.status, move, rotate, hardDrop, toggleFreeze, moveToEnd]);
+  }, [gameState.status, move, rotate, hardDrop, toggleFreeze, moveToEnd, stopGame]);
 
   const updateConfig = (dim: keyof GameState['config'], val: number) => {
     setGameState(prev => ({
@@ -364,7 +382,6 @@ export default function App() {
 
   const handleWheel = (e: React.WheelEvent) => {
     if (gameState.status !== 'PLAYING' || gameState.isFrozen) return;
-    // Rotate counter-clockwise on scroll up, clockwise on scroll down
     rotate(e.deltaY < 0);
   };
 
@@ -394,12 +411,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
             <div className="text-xs uppercase tracking-widest text-slate-500 px-2 font-bold">Tactics</div>
             <button 
               onClick={(e) => { e.stopPropagation(); toggleFreeze(); }}
               disabled={gameState.status !== 'PLAYING'}
-              className={`w-full py-4 rounded-xl font-black text-[10px] tracking-[0.2em] transition-all transform active:scale-95 shadow-lg border-2 
+              className={`w-full py-3 rounded-xl font-black text-[10px] tracking-[0.2em] transition-all transform active:scale-95 shadow-lg border-2 
                 ${gameState.status === 'PLAYING' 
                   ? gameState.isFrozen 
                     ? 'bg-red-600 border-red-400 text-white shadow-red-900/60 animate-pulse' 
@@ -407,6 +424,14 @@ export default function App() {
                   : 'bg-slate-800 border-slate-700 text-slate-500 opacity-50 cursor-not-allowed'}`}
             >
               {gameState.isFrozen ? 'RELEASE' : 'FREEZE'}
+            </button>
+            
+            <button 
+              onClick={(e) => { e.stopPropagation(); stopGame(); }}
+              disabled={gameState.status !== 'PLAYING' && gameState.status !== 'GAME_OVER'}
+              className="w-full py-3 rounded-xl font-black text-[10px] tracking-[0.2em] transition-all transform active:scale-95 shadow-lg border-2 bg-slate-900 border-red-900/50 text-red-500 hover:bg-red-900/20 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              TERMINATE
             </button>
           </div>
 
@@ -416,7 +441,7 @@ export default function App() {
                 <span className="text-cyan-500">M1/M3</span><span>L/R MOVE</span>
                 <span className="text-cyan-500">M2_P</span><span>DROP</span>
                 <span className="text-cyan-500">M2_S</span><span>ROTATE</span>
-                <span className="text-cyan-500">CTRL</span><span>FAST MOVE</span>
+                <span className="text-cyan-500">ESC</span><span>STOP</span>
              </div>
           </div>
         </div>
@@ -485,7 +510,13 @@ export default function App() {
                   <div className="mb-8">
                     <div className="text-red-500 text-xs font-bold tracking-[0.5em] uppercase mb-4 animate-pulse">Connection Interrupted</div>
                     <div className="text-4xl font-black text-white italic mb-2">SESSION ENDED</div>
-                    <div className="text-slate-500 text-sm font-mono">SCORE: {gameState.score.toLocaleString()}</div>
+                    <div className="text-slate-500 text-sm font-mono mb-6">FINAL SCORE: {gameState.score.toLocaleString()}</div>
+                    <button 
+                      onClick={stopGame}
+                      className="text-xs text-slate-400 hover:text-white underline underline-offset-4 uppercase tracking-widest"
+                    >
+                      Return to calibration
+                    </button>
                   </div>
                 ) : (
                   <div className="mb-8">
@@ -524,13 +555,15 @@ export default function App() {
                   </div>
                 )}
 
-                <button 
-                  onClick={startGame}
-                  className="group relative px-12 py-4 bg-transparent border-2 border-cyan-500 text-cyan-400 rounded-full font-black text-sm tracking-[0.2em] transition-all hover:bg-cyan-500 hover:text-white shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-cyan-500/60"
-                >
-                  <span className="relative z-10">{gameState.status === 'GAME_OVER' ? 'RE-SYNC CORE' : 'BOOT SYSTEM'}</span>
-                  <div className="absolute inset-0 rounded-full bg-cyan-500 blur-md opacity-0 group-hover:opacity-40 transition-opacity"></div>
-                </button>
+                {gameState.status === 'IDLE' && (
+                  <button 
+                    onClick={startGame}
+                    className="group relative px-12 py-4 bg-transparent border-2 border-cyan-500 text-cyan-400 rounded-full font-black text-sm tracking-[0.2em] transition-all hover:bg-cyan-500 hover:text-white shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-cyan-500/60"
+                  >
+                    <span className="relative z-10">BOOT SYSTEM</span>
+                    <div className="absolute inset-0 rounded-full bg-cyan-500 blur-md opacity-0 group-hover:opacity-40 transition-opacity"></div>
+                  </button>
+                )}
               </div>
             )}
           </div>
