@@ -1,0 +1,5 @@
+{
+  "name": "Bori Neon Tetris",
+  "description": "A high-performance, neon-themed Tetris game with variable field sizes, precision mouse controls, and AI-powered feedback from Gemini.",
+  "requestFramePermissions": []
+}
