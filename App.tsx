@@ -200,6 +200,7 @@ export default function App() {
         currentPiece: null,
         status: 'GAME_OVER',
         score: newScore,
+        lines: newLinesTotal,
         isFrozen: false
       };
     }
@@ -507,10 +508,22 @@ export default function App() {
             {gameState.status !== 'PLAYING' && (
               <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
                 {gameState.status === 'GAME_OVER' ? (
-                  <div className="mb-8">
+                  <div className="mb-8 w-full max-w-[280px]">
                     <div className="text-red-500 text-xs font-bold tracking-[0.5em] uppercase mb-4 animate-pulse">Connection Interrupted</div>
-                    <div className="text-4xl font-black text-white italic mb-2">SESSION ENDED</div>
-                    <div className="text-slate-500 text-sm font-mono mb-6">FINAL SCORE: {gameState.score.toLocaleString()}</div>
+                    <div className="text-4xl font-black text-white italic mb-4">SESSION ENDED</div>
+                    
+                    <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 mb-6 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Final Score</span>
+                        <span className="text-lg font-mono text-cyan-400">{gameState.score.toLocaleString()}</span>
+                      </div>
+                      <div className="h-[1px] bg-slate-800" />
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Lines Cleared</span>
+                        <span className="text-lg font-mono text-white">{gameState.lines}</span>
+                      </div>
+                    </div>
+
                     <button 
                       onClick={stopGame}
                       className="text-xs text-slate-400 hover:text-white underline underline-offset-4 uppercase tracking-widest"
