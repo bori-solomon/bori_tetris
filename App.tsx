@@ -11,7 +11,6 @@ const Block: React.FC<{ color: string; isGhost?: boolean }> = ({ color, isGhost 
 );
 
 const PiecePreview: React.FC<{ piece: Tetromino | null; label: string }> = ({ piece, label }) => {
-  // Filter out empty rows/cols for the preview to center it better
   const renderShape = piece?.shape.filter(row => row.some(cell => cell !== 0)) || [];
   const maxCols = renderShape.length > 0 ? Math.max(...renderShape.map(row => row.length)) : 0;
 
@@ -68,14 +67,26 @@ export default function App() {
     }
   });
 
+  const [lifetimeLines, setLifetimeLines] = useState<number>(0);
   const [coachComment, setCoachComment] = useState<string>("System Ready. Calibrate field dimensions to begin.");
   const coachService = useRef(new GeminiCoachService());
   const gameLoopRef = useRef<number | null>(null);
 
-  // --- Constants for styling ---
-  const FROZEN_COLOR = 'bg-red-600 border-red-400 shadow-[0_0_20px_rgba(220,38,38,1)] animate-pulse';
+  // Load lifetime stats
+  useEffect(() => {
+    const saved = localStorage.getItem('neon_stacker_lifetime_lines');
+    if (saved) setLifetimeLines(parseInt(saved, 10));
+  }, []);
 
-  // --- Helper Functions ---
+  const updateLifetimeLines = useCallback((added: number) => {
+    setLifetimeLines(prev => {
+      const next = prev + added;
+      localStorage.setItem('neon_stacker_lifetime_lines', next.toString());
+      return next;
+    });
+  }, []);
+
+  const FROZEN_COLOR = 'bg-red-600 border-red-400 shadow-[0_0_20px_rgba(220,38,38,1)] animate-pulse';
 
   const getRandomPiece = useCallback((width: number): Tetromino => {
     const types: TetrominoType[] = ['I', 'J', 'L', 'O', 'S', 'T', 'Z'];
@@ -83,7 +94,7 @@ export default function App() {
     const def = TETROMINOES[type];
     return {
       type,
-      shape: JSON.parse(JSON.stringify(def.shape)), // Deep copy shape
+      shape: JSON.parse(JSON.stringify(def.shape)),
       color: def.color,
       position: { x: Math.floor(width / 2) - Math.floor(def.shape[0].length / 2), y: 0 }
     };
@@ -118,6 +129,24 @@ export default function App() {
   }, []);
 
   const stopGame = useCallback(() => {
+    setGameState(prev => {
+      if (prev.status === 'PLAYING') {
+        setCoachComment("Manual override successful. Data cached.");
+        return { ...prev, status: 'GAME_OVER', currentPiece: null, isFrozen: false };
+      }
+      return {
+        ...prev,
+        status: 'IDLE',
+        currentPiece: null,
+        isFrozen: false,
+        score: 0,
+        lines: 0,
+        level: 1
+      };
+    });
+  }, []);
+
+  const resetToIdle = useCallback(() => {
     setGameState(prev => ({
       ...prev,
       status: 'IDLE',
@@ -127,29 +156,18 @@ export default function App() {
       lines: 0,
       level: 1
     }));
-    setCoachComment("Session terminated. Awaiting new calibration.");
+    setCoachComment("System reset. Awaiting instructions.");
   }, []);
 
   const rotate = useCallback((clockwise: boolean) => {
     setGameState(prev => {
       if (!prev.currentPiece || prev.status !== 'PLAYING' || prev.isFrozen) return prev;
-      
       const shape = prev.currentPiece.shape;
-      const newShape = shape[0].map((_, index) =>
-        shape.map(row => row[index])
-      );
-      
-      if (clockwise) {
-        newShape.forEach(row => row.reverse());
-      } else {
-        newShape.reverse();
-      }
-
+      const newShape = shape[0].map((_, index) => shape.map(row => row[index]));
+      if (clockwise) newShape.forEach(row => row.reverse());
+      else newShape.reverse();
       if (!checkCollision(prev.currentPiece, prev.grid, 0, 0, newShape)) {
-        return {
-          ...prev,
-          currentPiece: { ...prev.currentPiece, shape: newShape }
-        };
+        return { ...prev, currentPiece: { ...prev.currentPiece, shape: newShape } };
       }
       return prev;
     });
@@ -181,6 +199,10 @@ export default function App() {
       return true;
     });
 
+    if (clearedLinesCount > 0) {
+      updateLifetimeLines(clearedLinesCount);
+    }
+
     while (filteredGrid.length < config.height) {
       filteredGrid.unshift(Array(config.width).fill(null));
     }
@@ -189,11 +211,11 @@ export default function App() {
     const newLinesTotal = lines + clearedLinesCount;
     const newLevel = Math.floor(newLinesTotal / 10) + 1;
 
-    // IMPORTANT: The next piece spawns here
     const spawnPos = { x: Math.floor(config.width / 2) - Math.floor(nextPiece.shape[0].length / 2), y: 0 };
     const nextToSpawn = { ...nextPiece, position: spawnPos };
 
     if (checkCollision(nextToSpawn, filteredGrid)) {
+      setCoachComment("System failure. Sequence terminated.");
       return {
         ...state,
         grid: filteredGrid,
@@ -216,30 +238,22 @@ export default function App() {
       lines: newLinesTotal,
       level: newLevel
     };
-  }, [checkCollision, getRandomPiece]);
+  }, [checkCollision, getRandomPiece, updateLifetimeLines]);
 
   const move = useCallback((dx: number, dy: number) => {
     setGameState(prev => {
       if (!prev.currentPiece || prev.status !== 'PLAYING') return prev;
       if (prev.isFrozen && dy !== 0) return prev; 
-
       if (!checkCollision(prev.currentPiece, prev.grid, dx, dy)) {
         return {
           ...prev,
           currentPiece: { 
             ...prev.currentPiece, 
-            position: { 
-              x: prev.currentPiece.position.x + dx, 
-              y: prev.currentPiece.position.y + dy 
-            } 
+            position: { x: prev.currentPiece.position.x + dx, y: prev.currentPiece.position.y + dy } 
           }
         };
       }
-
-      if (dy > 0) {
-        return lockPiece(prev);
-      }
-
+      if (dy > 0) return lockPiece(prev);
       return prev;
     });
   }, [checkCollision, lockPiece]);
@@ -248,9 +262,7 @@ export default function App() {
     setGameState(prev => {
       if (!prev.currentPiece || prev.status !== 'PLAYING') return prev;
       let dropY = 0;
-      while (!checkCollision(prev.currentPiece, prev.grid, 0, dropY + 1)) {
-        dropY++;
-      }
+      while (!checkCollision(prev.currentPiece, prev.grid, 0, dropY + 1)) dropY++;
       const droppedPiece = {
         ...prev.currentPiece,
         position: { x: prev.currentPiece.position.x, y: prev.currentPiece.position.y + dropY }
@@ -263,9 +275,7 @@ export default function App() {
     setGameState(prev => {
       if (!prev.currentPiece || prev.status !== 'PLAYING' || prev.isFrozen) return prev;
       let finalDx = 0;
-      while (!checkCollision(prev.currentPiece, prev.grid, finalDx + dx, 0)) {
-        finalDx += dx;
-      }
+      while (!checkCollision(prev.currentPiece, prev.grid, finalDx + dx, 0)) finalDx += dx;
       return {
         ...prev,
         currentPiece: {
@@ -276,54 +286,29 @@ export default function App() {
     });
   }, [checkCollision]);
 
-  // --- Game Loop and Effects ---
-
   useEffect(() => {
     if (gameState.status === 'PLAYING' && !gameState.isFrozen) {
       const currentSpeed = Math.max(50, gameState.config.baseSpeed * Math.pow(0.9, gameState.level - 1));
-      gameLoopRef.current = window.setInterval(() => {
-        move(0, 1);
-      }, currentSpeed);
+      gameLoopRef.current = window.setInterval(() => move(0, 1), currentSpeed);
     } else {
       if (gameLoopRef.current) clearInterval(gameLoopRef.current);
     }
-    return () => {
-      if (gameLoopRef.current) clearInterval(gameLoopRef.current);
-    };
+    return () => { if (gameLoopRef.current) clearInterval(gameLoopRef.current); };
   }, [gameState.status, gameState.level, gameState.config.baseSpeed, gameState.isFrozen, move]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (gameState.status !== 'PLAYING') return;
-
       switch (e.code) {
-        case 'ArrowLeft':
-          if (e.ctrlKey) moveToEnd(-1);
-          else move(-1, 0);
-          break;
-        case 'ArrowRight':
-          if (e.ctrlKey) moveToEnd(1);
-          else move(1, 0);
-          break;
-        case 'ArrowDown':
-          move(0, 1);
-          break;
-        case 'ArrowUp':
-          rotate(true);
-          break;
-        case 'Space':
-          e.preventDefault();
-          hardDrop();
-          break;
-        case 'KeyF':
-          toggleFreeze();
-          break;
-        case 'Escape':
-          stopGame();
-          break;
+        case 'ArrowLeft': e.ctrlKey ? moveToEnd(-1) : move(-1, 0); break;
+        case 'ArrowRight': e.ctrlKey ? moveToEnd(1) : move(1, 0); break;
+        case 'ArrowDown': move(0, 1); break;
+        case 'ArrowUp': rotate(true); break;
+        case 'Space': e.preventDefault(); hardDrop(); break;
+        case 'KeyF': toggleFreeze(); break;
+        case 'Escape': stopGame(); break;
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [gameState.status, move, rotate, hardDrop, toggleFreeze, moveToEnd, stopGame]);
@@ -342,7 +327,6 @@ export default function App() {
     const { width, height } = gameState.config;
     const p1 = getRandomPiece(width);
     const p2 = getRandomPiece(width);
-
     setGameState(prev => ({
       ...prev,
       grid: Array.from({ length: height }, () => Array(width).fill(null)),
@@ -361,24 +345,18 @@ export default function App() {
   const getGhostPosition = () => {
     if (!gameState.currentPiece || gameState.isFrozen) return null;
     let dropY = 0;
-    while (!checkCollision(gameState.currentPiece, gameState.grid, 0, dropY + 1)) {
-      dropY++;
-    }
-    return {
-      x: gameState.currentPiece.position.x,
-      y: gameState.currentPiece.position.y + dropY
-    };
+    while (!checkCollision(gameState.currentPiece, gameState.grid, 0, dropY + 1)) dropY++;
+    return { x: gameState.currentPiece.position.x, y: gameState.currentPiece.position.y + dropY };
   };
 
   const ghostPos = getGhostPosition();
 
-  // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     if (gameState.status !== 'PLAYING') return;
     e.preventDefault();
-    if (e.button === 0) move(-1, 0); // Left Click
-    if (e.button === 2) move(1, 0);  // Right Click
-    if (e.button === 1) hardDrop();  // Wheel Click
+    if (e.button === 0) move(-1, 0);
+    if (e.button === 2) move(1, 0);
+    if (e.button === 1) hardDrop();
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -400,14 +378,18 @@ export default function App() {
             <h1 className="text-2xl font-black italic tracking-tighter text-cyan-400 mb-2">NEON<br/>STACKER</h1>
             <div className="h-1 w-12 bg-cyan-500 rounded-full mb-6 shadow-[0_0_10px_rgba(34,211,238,0.5)]" />
             
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div>
-                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1">Score</div>
+                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1 tracking-wider">Score</div>
                 <div className="text-2xl font-mono text-white tabular-nums">{gameState.score.toLocaleString()}</div>
               </div>
               <div>
-                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1">Level</div>
-                <div className="text-2xl font-mono text-white tabular-nums">{gameState.level}</div>
+                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1 tracking-wider">Erased</div>
+                <div className="text-2xl font-mono text-cyan-400 tabular-nums">{gameState.lines}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase text-slate-500 font-bold mb-1 tracking-wider">Level</div>
+                <div className="text-2xl font-mono text-purple-400 tabular-nums">{gameState.level}</div>
               </div>
             </div>
           </div>
@@ -429,7 +411,7 @@ export default function App() {
             
             <button 
               onClick={(e) => { e.stopPropagation(); stopGame(); }}
-              disabled={gameState.status !== 'PLAYING' && gameState.status !== 'GAME_OVER'}
+              disabled={gameState.status !== 'PLAYING'}
               className="w-full py-3 rounded-xl font-black text-[10px] tracking-[0.2em] transition-all transform active:scale-95 shadow-lg border-2 bg-slate-900 border-red-900/50 text-red-500 hover:bg-red-900/20 disabled:opacity-30 disabled:cursor-not-allowed"
             >
               TERMINATE
@@ -457,7 +439,6 @@ export default function App() {
             onWheel={handleWheel}
             onContextMenu={(e) => e.preventDefault()}
           >
-            {/* Grid Area */}
             <div 
               className="grid gap-[1px] bg-slate-800/20" 
               style={{ 
@@ -508,37 +489,47 @@ export default function App() {
             {gameState.status !== 'PLAYING' && (
               <div className="absolute inset-0 bg-slate-950/95 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-in fade-in duration-300">
                 {gameState.status === 'GAME_OVER' ? (
-                  <div className="mb-8 w-full max-w-[280px]">
-                    <div className="text-red-500 text-xs font-bold tracking-[0.5em] uppercase mb-4 animate-pulse">Connection Interrupted</div>
-                    <div className="text-4xl font-black text-white italic mb-4">SESSION ENDED</div>
+                  <div className="mb-8 w-full max-w-[340px]">
+                    <div className="text-red-500 text-[10px] font-bold tracking-[0.5em] uppercase mb-4 animate-pulse">Session Summary</div>
+                    <div className="text-4xl font-black text-white italic mb-8 uppercase tracking-tighter">Mission Report</div>
                     
-                    <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 mb-6 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Final Score</span>
-                        <span className="text-lg font-mono text-cyan-400">{gameState.score.toLocaleString()}</span>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 mb-8 space-y-5 shadow-2xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 blur-3xl rounded-full -mr-16 -mt-16" />
+                      
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Total Lines Erased</span>
+                        <span className="text-4xl font-mono text-cyan-400 font-black">{gameState.lines}</span>
                       </div>
-                      <div className="h-[1px] bg-slate-800" />
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Lines Cleared</span>
-                        <span className="text-lg font-mono text-white">{gameState.lines}</span>
+                      
+                      <div className="h-[1px] bg-slate-800/50" />
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-1 items-start">
+                          <span className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">Final Score</span>
+                          <span className="text-lg font-mono text-white">{gameState.score.toLocaleString()}</span>
+                        </div>
+                        <div className="flex flex-col gap-1 items-start">
+                          <span className="text-[9px] text-purple-600 uppercase font-bold tracking-widest">Lifetime Impact</span>
+                          <span className="text-lg font-mono text-purple-400">{lifetimeLines}</span>
+                        </div>
                       </div>
                     </div>
 
                     <button 
-                      onClick={stopGame}
-                      className="text-xs text-slate-400 hover:text-white underline underline-offset-4 uppercase tracking-widest"
+                      onClick={resetToIdle}
+                      className="group relative w-full px-8 py-4 bg-transparent border-2 border-slate-700 text-slate-400 rounded-full font-black text-[10px] tracking-[0.2em] transition-all hover:border-white hover:text-white"
                     >
-                      Return to calibration
+                      <span className="relative z-10">NEW CALIBRATION</span>
                     </button>
                   </div>
                 ) : (
                   <div className="mb-8">
                     <div className="text-cyan-400 text-xs font-bold tracking-[0.5em] uppercase mb-4">Core Calibration</div>
                     <div className="text-4xl font-black text-white italic uppercase tracking-tighter">NEON_STACKER_V2</div>
+                    <div className="mt-4 text-[10px] text-slate-500 uppercase tracking-widest">Lifetime Erased: {lifetimeLines}</div>
                   </div>
                 )}
 
-                {/* Configuration Sliders (Visible in IDLE state) */}
                 {gameState.status === 'IDLE' && (
                   <div className="w-full max-w-[240px] space-y-6 mb-12">
                     <div className="space-y-2">
